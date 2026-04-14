@@ -10,7 +10,14 @@ Dashboard interactivo para analizar la brecha de género en el mercado laboral d
 - Análisis por sector económico
 - Visualizaciones interactivas
 
-## 📦 Instalación
+## 📦 Instalación local
 
 ```bash
+# Clonar el repositorio
+git clone [URL-de-tu-repositorio]
+
+# Instalar dependencias
 pip install -r requirements.txt
+
+# Ejecutar la aplicación
+streamlit run dashboard_brecha_genero.py

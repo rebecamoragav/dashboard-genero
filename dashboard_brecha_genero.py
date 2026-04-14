@@ -200,33 +200,33 @@ def cargar_datos() -> pd.DataFrame:
     
     # Función segura para mapear sexo
     def map_gender(x):
-    if pd.isna(x) or x is None:
+        if pd.isna(x) or x is None:
+            return "No Especificado"
+    
+        try:
+            x_str = str(x).strip().upper()
+        except:
+            return "No Especificado"
+        
+        # Mapeo directo
+        if x_str in GENDER_MAP:
+            return GENDER_MAP[x_str]
+        
+        # Mapeo por primera letra
+        if len(x_str) > 0:
+            first_char = x_str[0]
+            if first_char in GENDER_MAP:
+                return GENDER_MAP[first_char]
+        
+        # Si el valor es numérico
+        try:
+            num_val = int(float(x_str))
+            if num_val in GENDER_MAP:
+                return GENDER_MAP[num_val]
+        except:
+            pass
+        
         return "No Especificado"
-    
-    try:
-        x_str = str(x).strip().upper()
-    except:
-        return "No Especificado"
-    
-    # Mapeo directo
-    if x_str in GENDER_MAP:
-        return GENDER_MAP[x_str]
-    
-    # Mapeo por primera letra
-    if len(x_str) > 0:
-        first_char = x_str[0]
-        if first_char in GENDER_MAP:
-            return GENDER_MAP[first_char]
-    
-    # Si el valor es numérico
-    try:
-        num_val = int(float(x_str))
-        if num_val in GENDER_MAP:
-            return GENDER_MAP[num_val]
-    except:
-        pass
-    
-    return "No Especificado"
     
     # Procesar SEXO
     df["SEXO"] = df["SEXO"].map(map_gender)

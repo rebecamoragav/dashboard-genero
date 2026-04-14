@@ -144,7 +144,6 @@ def cargar_datos() -> pd.DataFrame:
     if missing:
         st.error(f"⚠️ Columnas no encontradas: {missing}\nColumnas disponibles: {list(df.columns)}")
         st.stop()
-
     def safe_map(x, mapping):
     try:
         s = str(x).strip().upper()

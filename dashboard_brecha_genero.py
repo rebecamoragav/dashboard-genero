@@ -146,9 +146,12 @@ def cargar_datos() -> pd.DataFrame:
         st.stop()
 
     df["SEXO"] = (df["SEXO"].astype(str).str.strip().str.upper()
-                 .map(lambda x: GENDER_MAP.get(x, GENDER_MAP.get(x[:1], x))))
+              .map(lambda x: GENDER_MAP.get(x, GENDER_MAP.get(x[:1], x)) 
+                   if x not in ("NAN", "NONE", "", " ") else x))
+
     df["AREA"] = (df["AREA"].astype(str).str.strip().str.upper()
-                 .map(lambda x: AREA_MAP.get(x, AREA_MAP.get(x[:1], x))))
+              .map(lambda x: AREA_MAP.get(x, AREA_MAP.get(x[:1], x)) 
+                   if x not in ("NAN", "NONE", "", " ") else x))
 
     pais_norm = {"BOLIVIA": "Bolivia", "ECUADOR": "Ecuador",
                  "PERU": "Perú", "PERÚ": "Perú"}

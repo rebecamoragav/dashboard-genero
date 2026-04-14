@@ -16,7 +16,6 @@ from plotly.subplots import make_subplots
 import warnings
 import requests
 import io
-import sys
 
 warnings.filterwarnings("ignore")
 
@@ -199,20 +198,71 @@ def cargar_datos() -> pd.DataFrame:
             else:
                 df[col] = "No Especificado"
     
+    # Función segura para mapear sexo
+    def map_gender(x):
+        if pd.isna(x) or x is None:
+            return "No Especificado"
+        x_str = str(x).strip().upper()
+        
+        # Mapeo directo
+        if x_str in GENDER_MAP:
+            return GENDER_MAP[x_str]
+        
+        # Mapeo por primera letra
+        first_char = x_str[:1] if len(x_str) > 0 else ""
+        if first_char in GENDER_MAP:
+            return GENDER_MAP[first_char]
+        
+        # Si el valor es numérico
+        try:
+            num_val = int(float(x_str))
+            if num_val in GENDER_MAP:
+                return GENDER_MAP[num_val]
+        except:
+            pass
+        
+        return "No Especificado"
+    
     # Procesar SEXO
-    df["SEXO"] = df["SEXO"].astype(str).str.strip().str.upper()
-    df["SEXO"] = df["SEXO"].map(lambda x: GENDER_MAP.get(x, GENDER_MAP.get(x[:1], x)))
+    df["SEXO"] = df["SEXO"].apply(map_gender)
+    
+    # Función segura para mapear área
+    def map_area(x):
+        if pd.isna(x) or x is None:
+            return "Urbano"
+        x_str = str(x).strip().upper()
+        
+        if x_str in AREA_MAP:
+            return AREA_MAP[x_str]
+        
+        first_char = x_str[:1] if len(x_str) > 0 else ""
+        if first_char in AREA_MAP:
+            return AREA_MAP[first_char]
+        
+        try:
+            num_val = int(float(x_str))
+            if num_val in AREA_MAP:
+                return AREA_MAP[num_val]
+        except:
+            pass
+        
+        return "Urbano"
     
     # Procesar AREA
     if "AREA" in df.columns:
-        df["AREA"] = df["AREA"].astype(str).str.strip().str.upper()
-        df["AREA"] = df["AREA"].map(lambda x: AREA_MAP.get(x, AREA_MAP.get(x[:1], "Urbano")))
+        df["AREA"] = df["AREA"].apply(map_area)
     
     # Procesar PAIS
     pais_norm = {"BOLIVIA": "Bolivia", "ECUADOR": "Ecuador",
                  "PERU": "Perú", "PERÚ": "Perú"}
-    df["PAIS"] = df["PAIS"].astype(str).str.strip().str.upper()
-    df["PAIS"] = df["PAIS"].map(lambda x: pais_norm.get(x, x.capitalize()))
+    
+    def map_pais(x):
+        if pd.isna(x) or x is None:
+            return "No Especificado"
+        x_str = str(x).strip().upper()
+        return pais_norm.get(x_str, x_str.capitalize())
+    
+    df["PAIS"] = df["PAIS"].apply(map_pais)
     
     # Convertir columnas numéricas
     for col in ["INGRESO_LABORAL_OCP_PPAL_MES", "FACTOR_EXPANSION_ANUAL", "ANIOS_ESTUDIO"]:
@@ -908,55 +958,55 @@ def main():
     col1, col2 = st.columns(2)
     with col1: 
         fig1 = grafico_barras_ingresos(df_f)
-        if fig1.data: st.plotly_chart(fig1, use_container_width=True)
+        if fig1 and fig1.data: st.plotly_chart(fig1, use_container_width=True)
     with col2: 
         fig2 = grafico_brecha_paises(df_f)
-        if fig2.data: st.plotly_chart(fig2, use_container_width=True)
+        if fig2 and fig2.data: st.plotly_chart(fig2, use_container_width=True)
 
     st.markdown('<div class="section-title">📈 Distribución del Ingreso y Educación</div>', unsafe_allow_html=True)
     col3, col4 = st.columns(2)
     with col3: 
         fig3 = boxplot_ingresos(df_f)
-        if fig3.data: st.plotly_chart(fig3, use_container_width=True)
+        if fig3 and fig3.data: st.plotly_chart(fig3, use_container_width=True)
     with col4: 
         fig4 = grafico_educacion(df_f)
-        if fig4.data: st.plotly_chart(fig4, use_container_width=True)
+        if fig4 and fig4.data: st.plotly_chart(fig4, use_container_width=True)
 
     st.markdown('<div class="section-title">🏙️ Área Geográfica y Participación Laboral</div>', unsafe_allow_html=True)
     col5, col6 = st.columns(2)
     with col5: 
         fig5 = grafico_area_urbano_rural(df_f)
-        if fig5.data: st.plotly_chart(fig5, use_container_width=True)
+        if fig5 and fig5.data: st.plotly_chart(fig5, use_container_width=True)
     with col6: 
         fig6 = grafico_participacion(df_f)
-        if fig6.data: st.plotly_chart(fig6, use_container_width=True)
+        if fig6 and fig6.data: st.plotly_chart(fig6, use_container_width=True)
 
     st.markdown('<div class="section-title">🏭 Análisis por Actividad Económica</div>', unsafe_allow_html=True)
     fig7 = grafico_ingreso_sector(df_f)
-    if fig7.data: st.plotly_chart(fig7, use_container_width=True)
+    if fig7 and fig7.data: st.plotly_chart(fig7, use_container_width=True)
     
     fig8 = grafico_brecha_por_sector(df_f)
-    if fig8.data: st.plotly_chart(fig8, use_container_width=True)
+    if fig8 and fig8.data: st.plotly_chart(fig8, use_container_width=True)
 
     st.markdown('<div class="section-title">🫧 Mapa de Brechas por Sector Económico</div>', unsafe_allow_html=True)
     fig9 = grafico_burbuja_sectores(df_f)
-    if fig9.data: st.plotly_chart(fig9, use_container_width=True)
+    if fig9 and fig9.data: st.plotly_chart(fig9, use_container_width=True)
 
     st.markdown('<div class="section-title">🎻 Distribución Real del Ingreso — Gráfico de Violín</div>', unsafe_allow_html=True)
     fig10 = grafico_violin_ingresos(df_f)
-    if fig10.data: st.plotly_chart(fig10, use_container_width=True)
+    if fig10 and fig10.data: st.plotly_chart(fig10, use_container_width=True)
 
     st.markdown('<div class="section-title">🌡️ Mapa de Calor — Brecha Salarial por País y Sector</div>', unsafe_allow_html=True)
     fig11 = grafico_heatmap_brecha(df_f)
-    if fig11.data: st.plotly_chart(fig11, use_container_width=True)
+    if fig11 and fig11.data: st.plotly_chart(fig11, use_container_width=True)
 
     st.markdown('<div class="section-title">🧇 Waffle Chart — Composición de la Fuerza Laboral</div>', unsafe_allow_html=True)
     fig12 = grafico_waffle_participacion(df_f)
-    if fig12.data: st.plotly_chart(fig12, use_container_width=True)
+    if fig12 and fig12.data: st.plotly_chart(fig12, use_container_width=True)
 
     st.markdown('<div class="section-title">🕸️ Comparación Multi-Indicador entre Países</div>', unsafe_allow_html=True)
     fig13 = grafico_radar_paises(df_f)
-    if fig13.data: st.plotly_chart(fig13, use_container_width=True)
+    if fig13 and fig13.data: st.plotly_chart(fig13, use_container_width=True)
 
     st.markdown('<div class="section-title">📋 Tabla Resumen por País y Sexo</div>', unsafe_allow_html=True)
     resumen_rows = []

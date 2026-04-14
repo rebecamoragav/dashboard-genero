@@ -878,11 +878,18 @@ def main():
         areas_sel   = st.multiselect("🏙️ Área", areas_disp, default=areas_disp)
         
         if "ACTIVIDAD_ECONOMICA" in df.columns:
-            acts_disp = sorted([a for a in df["ACTIVIDAD_ECONOMICA"].unique()
-                               if a not in ("No Especificado", "nan", "Nan", "None")])
+            acts_disp = sorted([
+                str(a).strip() for a in df["ACTIVIDAD_ECONOMICA"].unique()
+                if pd.notna(a) and str(a).strip().lower() not in ["no especificado", "nan", "none"]
+            ])
         else:
             acts_disp = []
-        acts_sel    = st.multiselect("🏭 Actividad económica", acts_disp, default=acts_disp[:5] if acts_disp else [])
+
+        acts_sel = st.multiselect(
+            "🏭 Actividad económica",
+            acts_disp,
+            default=acts_disp[:5] if acts_disp else []
+        )
         
         st.markdown("---")
         st.markdown("### 📌 Notas metodológicas")

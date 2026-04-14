@@ -14,8 +14,12 @@ import plotly.express as px
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import warnings
+import requests
+import io
+
 warnings.filterwarnings("ignore")
 
+# Configuración de la página
 st.set_page_config(
     page_title="Brecha de Género | Bolivia · Ecuador · Perú",
     page_icon="⚖️",
@@ -23,6 +27,7 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
+# Constantes
 COLOR_HOMBRE   = "#1A6FA8"
 COLOR_MUJER    = "#C0392B"
 COLOR_NEUTRAL  = "#2C3E50"
@@ -46,6 +51,7 @@ EXCHANGE_RATES = {
     "Perú":    1 / 3.75,
 }
 
+# CSS personalizado
 st.markdown("""
 <style>
 .stApp { background-color: #F4F6F9; }
@@ -100,25 +106,63 @@ section[data-testid="stSidebar"] * { color: #ECF0F1 !important; }
 # ─────────────────────────────────────────────────────────────────────────────
 GDRIVE_FILE_ID = "1GdoiBHtLbmZzCI81_V094ozqzksaaR3y"
 
-@st.cache_data(show_spinner="Cargando datos desde Google Drive…")
+@st.cache_data(show_spinner="Cargando datos desde Google Drive…", ttl=3600)
 def cargar_datos() -> pd.DataFrame:
     """
     Descarga el CSV desde Google Drive y lo procesa.
-    No requiere tener el archivo localmente.
     """
-    url = f"https://drive.google.com/uc?export=download&id={GDRIVE_FILE_ID}"
-
+    # Método mejorado para Google Drive
+    def download_file_from_google_drive(id):
+        URL = "https://docs.google.com/uc?export=download"
+        session = requests.Session()
+        response = session.get(URL, params={'id': id}, stream=True)
+        
+        # Verificar si hay advertencia de virus
+        for key, value in response.cookies.items():
+            if key.startswith('download_warning'):
+                params = {'id': id, 'confirm': value}
+                response = session.get(URL, params=params, stream=True)
+                break
+        
+        return response.content
+    
     try:
-        df = pd.read_csv(url, encoding="utf-8")
-    except UnicodeDecodeError:
-        df = pd.read_csv(url, encoding="latin-1")
+        # Descargar el archivo
+        file_content = download_file_from_google_drive(GDRIVE_FILE_ID)
+        
+        # Intentar diferentes codificaciones
+        try:
+            df = pd.read_csv(io.BytesIO(file_content), encoding='utf-8')
+        except UnicodeDecodeError:
+            try:
+                df = pd.read_csv(io.BytesIO(file_content), encoding='latin-1')
+            except:
+                df = pd.read_csv(io.BytesIO(file_content), encoding='iso-8859-1')
+        
+        if df.empty:
+            st.error("El archivo CSV está vacío")
+            st.stop()
+            
     except Exception as e:
-        st.error(f"❌ No se pudo descargar el archivo desde Google Drive.\n\nError: {e}\n\n"
-                 "Verifique que el archivo esté compartido como 'Cualquier persona con el enlace puede ver'.")
-        st.stop()
-
+        st.error(f"❌ No se pudo descargar el archivo desde Google Drive.\n\nError: {str(e)}\n\n"
+                 "Verifique que el archivo esté compartido como 'Cualquier persona con el enlace puede ver'.\n\n"
+                 "También puede intentar descargar manualmente el archivo y subirlo a la aplicación.")
+        
+        # Opción alternativa: permitir subir archivo manualmente
+        st.info("📁 Como alternativa, puede subir el archivo CSV manualmente:")
+        uploaded_file = st.file_uploader("Subir archivo CONSOLIDADO.csv", type=['csv'])
+        if uploaded_file is not None:
+            try:
+                df = pd.read_csv(uploaded_file, encoding='utf-8')
+            except:
+                df = pd.read_csv(uploaded_file, encoding='latin-1')
+        else:
+            st.stop()
+    
+    # Limpiar nombres de columnas
     df.columns = df.columns.str.strip().str.upper()
-
+    
+    # Mapeo de columnas
     rename_map = {}
     for col in df.columns:
         if "ANIO" in col and "ESTUD" in col:
@@ -135,62 +179,88 @@ def cargar_datos() -> pd.DataFrame:
             rename_map[col] = "SEXO"
         elif col in ("PAIS", "PAÍS", "COUNTRY"):
             rename_map[col] = "PAIS"
+    
     df.rename(columns=rename_map, inplace=True)
-
+    
+    # Verificar columnas requeridas
     required = ["ANIOS_ESTUDIO", "INGRESO_LABORAL_OCP_PPAL_MES",
                 "FACTOR_EXPANSION_ANUAL", "AREA", "ACTIVIDAD_ECONOMICA",
                 "SEXO", "PAIS"]
+    
     missing = [c for c in required if c not in df.columns]
     if missing:
-        st.error(f"⚠️ Columnas no encontradas: {missing}\nColumnas disponibles: {list(df.columns)}")
-        st.stop()
-def safe_map(x, mapping):
-    try:
-        s = str(x).strip().upper()
-        if s in ("NAN", "NONE", "NAT", "", " "):
-            return x
-        return mapping.get(s, mapping.get(s[:1], x))
-    except Exception:
-        return x
-
-    df["SEXO"] = df["SEXO"].apply(lambda x: safe_map(x, GENDER_MAP))
-    df["AREA"] = df["AREA"].apply(lambda x: safe_map(x, AREA_MAP))
-
+        st.error(f"⚠️ Columnas no encontradas: {missing}\n"
+                 f"Columnas disponibles: {list(df.columns)[:10]}...")
+        
+        # Intentar crear columnas dummy si es necesario
+        for col in missing:
+            if col == "FACTOR_EXPANSION_ANUAL":
+                df[col] = 1.0
+            else:
+                df[col] = "No Especificado"
+    
+    # Procesar SEXO
+    df["SEXO"] = df["SEXO"].astype(str).str.strip().str.upper()
+    df["SEXO"] = df["SEXO"].map(lambda x: GENDER_MAP.get(x, GENDER_MAP.get(x[:1], x)))
+    
+    # Procesar AREA
+    if "AREA" in df.columns:
+        df["AREA"] = df["AREA"].astype(str).str.strip().str.upper()
+        df["AREA"] = df["AREA"].map(lambda x: AREA_MAP.get(x, AREA_MAP.get(x[:1], "Urbano")))
+    
+    # Procesar PAIS
     pais_norm = {"BOLIVIA": "Bolivia", "ECUADOR": "Ecuador",
                  "PERU": "Perú", "PERÚ": "Perú"}
-    df["PAIS"] = df["PAIS"].astype(str).str.strip().str.upper().map(
-        lambda x: pais_norm.get(x, x.capitalize()))
-
+    df["PAIS"] = df["PAIS"].astype(str).str.strip().str.upper()
+    df["PAIS"] = df["PAIS"].map(lambda x: pais_norm.get(x, x.capitalize()))
+    
+    # Convertir columnas numéricas
     for col in ["INGRESO_LABORAL_OCP_PPAL_MES", "FACTOR_EXPANSION_ANUAL", "ANIOS_ESTUDIO"]:
-        df[col] = pd.to_numeric(df[col], errors="coerce")
-
-    df.loc[df["INGRESO_LABORAL_OCP_PPAL_MES"] < 0, "INGRESO_LABORAL_OCP_PPAL_MES"] = np.nan
-    df.loc[df["ANIOS_ESTUDIO"] < 0,                "ANIOS_ESTUDIO"]                 = np.nan
-    df.loc[df["ANIOS_ESTUDIO"] > 30,               "ANIOS_ESTUDIO"]                 = np.nan
-    df.loc[df["FACTOR_EXPANSION_ANUAL"] <= 0,      "FACTOR_EXPANSION_ANUAL"]        = np.nan
-
-    df = df.dropna(subset=["SEXO", "PAIS", "FACTOR_EXPANSION_ANUAL"])
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce")
+    
+    # Limpiar valores atípicos
+    if "INGRESO_LABORAL_OCP_PPAL_MES" in df.columns:
+        df.loc[df["INGRESO_LABORAL_OCP_PPAL_MES"] < 0, "INGRESO_LABORAL_OCP_PPAL_MES"] = np.nan
+    
+    if "ANIOS_ESTUDIO" in df.columns:
+        df.loc[df["ANIOS_ESTUDIO"] < 0, "ANIOS_ESTUDIO"] = np.nan
+        df.loc[df["ANIOS_ESTUDIO"] > 30, "ANIOS_ESTUDIO"] = np.nan
+    
+    if "FACTOR_EXPANSION_ANUAL" in df.columns:
+        df.loc[df["FACTOR_EXPANSION_ANUAL"] <= 0, "FACTOR_EXPANSION_ANUAL"] = np.nan
+        df["FACTOR_EXPANSION_ANUAL"] = df["FACTOR_EXPANSION_ANUAL"].fillna(1.0)
+    
+    # Filtrar valores válidos
+    df = df.dropna(subset=["SEXO", "PAIS"])
     df = df[df["SEXO"].isin(["Hombre", "Mujer"])]
     df = df[df["PAIS"].isin(["Bolivia", "Ecuador", "Perú"])]
-
-    df["INGRESO_USD"] = df.apply(
-        lambda row: row["INGRESO_LABORAL_OCP_PPAL_MES"] * EXCHANGE_RATES.get(row["PAIS"], 1.0)
-        if pd.notna(row["INGRESO_LABORAL_OCP_PPAL_MES"]) else np.nan,
-        axis=1
-    )
-    q995 = df["INGRESO_USD"].quantile(0.995)
-    df.loc[df["INGRESO_USD"] > q995, "INGRESO_USD"] = np.nan
-
-    df["FACTOR_EXPANSION_ANUAL"] = df["FACTOR_EXPANSION_ANUAL"].fillna(1.0)
-
-    df["ACTIVIDAD_ECONOMICA"] = (df["ACTIVIDAD_ECONOMICA"]
-        .astype(str).str.strip().str.title()
-        .replace({"Nan": "No Especificado", "None": "No Especificado", "": "No Especificado"}))
-
+    
+    # Calcular ingreso en USD
+    if "INGRESO_LABORAL_OCP_PPAL_MES" in df.columns:
+        df["INGRESO_USD"] = df.apply(
+            lambda row: row["INGRESO_LABORAL_OCP_PPAL_MES"] * EXCHANGE_RATES.get(row["PAIS"], 1.0)
+            if pd.notna(row["INGRESO_LABORAL_OCP_PPAL_MES"]) else np.nan,
+            axis=1
+        )
+        
+        # Eliminar outliers extremos
+        if len(df) > 0:
+            q995 = df["INGRESO_USD"].quantile(0.995)
+            df.loc[df["INGRESO_USD"] > q995, "INGRESO_USD"] = np.nan
+    
+    # Procesar actividad económica
+    if "ACTIVIDAD_ECONOMICA" in df.columns:
+        df["ACTIVIDAD_ECONOMICA"] = (df["ACTIVIDAD_ECONOMICA"]
+            .astype(str).str.strip().str.title()
+            .replace({"Nan": "No Especificado", "None": "No Especificado", "": "No Especificado"}))
+    
     return df
 
 
 def ingreso_ponderado(grupo):
+    if "INGRESO_USD" not in grupo.columns or "FACTOR_EXPANSION_ANUAL" not in grupo.columns:
+        return np.nan
     mask = grupo["INGRESO_USD"].notna()
     if mask.sum() == 0:
         return np.nan
@@ -199,6 +269,8 @@ def ingreso_ponderado(grupo):
 
 
 def estudio_ponderado(grupo):
+    if "ANIOS_ESTUDIO" not in grupo.columns:
+        return np.nan
     mask = grupo["ANIOS_ESTUDIO"].notna()
     if mask.sum() == 0:
         return np.nan
@@ -207,7 +279,7 @@ def estudio_ponderado(grupo):
 
 
 def brecha_salarial(ingreso_h, ingreso_m):
-    if ingreso_h and ingreso_h > 0:
+    if ingreso_h and ingreso_h > 0 and not np.isnan(ingreso_h):
         return (ingreso_h - ingreso_m) / ingreso_h * 100
     return np.nan
 
@@ -241,10 +313,17 @@ def layout_base():
 
 
 def grafico_barras_ingresos(df_filtrado):
+    if "INGRESO_USD" not in df_filtrado.columns:
+        return go.Figure()
+    
     datos = (df_filtrado.dropna(subset=["INGRESO_USD"])
              .groupby(["PAIS", "SEXO"])
              .apply(ingreso_ponderado)
              .reset_index(name="INGRESO_USD"))
+    
+    if datos.empty:
+        return go.Figure()
+    
     fig = px.bar(
         datos, x="PAIS", y="INGRESO_USD", color="SEXO",
         barmode="group",
@@ -260,6 +339,9 @@ def grafico_barras_ingresos(df_filtrado):
 
 
 def grafico_brecha_paises(df_filtrado):
+    if "INGRESO_USD" not in df_filtrado.columns:
+        return go.Figure()
+    
     rows = []
     for pais, g in df_filtrado.dropna(subset=["INGRESO_USD"]).groupby("PAIS"):
         ih = ingreso_ponderado(g[g["SEXO"] == "Hombre"])
@@ -267,8 +349,10 @@ def grafico_brecha_paises(df_filtrado):
         b  = brecha_salarial(ih, im)
         if not np.isnan(b):
             rows.append({"PAIS": pais, "BRECHA": b})
+    
     if not rows:
         return go.Figure()
+    
     datos = pd.DataFrame(rows).sort_values("BRECHA", ascending=True)
     colors = [COLOR_HOMBRE if v > 0 else COLOR_MUJER for v in datos["BRECHA"]]
     fig = go.Figure(go.Bar(
@@ -290,7 +374,13 @@ def grafico_brecha_paises(df_filtrado):
 
 
 def boxplot_ingresos(df_filtrado):
+    if "INGRESO_USD" not in df_filtrado.columns:
+        return go.Figure()
+    
     df_bp = df_filtrado.dropna(subset=["INGRESO_USD"])
+    if df_bp.empty:
+        return go.Figure()
+    
     fig = px.box(
         df_bp, x="PAIS", y="INGRESO_USD", color="SEXO",
         color_discrete_map={"Hombre": COLOR_HOMBRE, "Mujer": COLOR_MUJER},
@@ -304,10 +394,17 @@ def boxplot_ingresos(df_filtrado):
 
 
 def grafico_educacion(df_filtrado):
+    if "ANIOS_ESTUDIO" not in df_filtrado.columns:
+        return go.Figure()
+    
     datos = (df_filtrado.dropna(subset=["ANIOS_ESTUDIO"])
              .groupby(["PAIS", "SEXO"])
              .apply(estudio_ponderado)
              .reset_index(name="ANIOS_ESTUDIO"))
+    
+    if datos.empty:
+        return go.Figure()
+    
     fig = px.bar(
         datos, x="PAIS", y="ANIOS_ESTUDIO", color="SEXO",
         barmode="group",
@@ -325,6 +422,9 @@ def grafico_participacion(df_filtrado):
     datos = (df_filtrado.groupby("SEXO")["FACTOR_EXPANSION_ANUAL"]
              .sum().reset_index())
     total = datos["FACTOR_EXPANSION_ANUAL"].sum()
+    if total == 0:
+        return go.Figure()
+    
     datos["PCT"] = datos["FACTOR_EXPANSION_ANUAL"] / total * 100
     fig = px.pie(
         datos, names="SEXO", values="PCT",
@@ -339,11 +439,21 @@ def grafico_participacion(df_filtrado):
 
 
 def grafico_area_urbano_rural(df_filtrado):
+    if "INGRESO_USD" not in df_filtrado.columns:
+        return go.Figure()
+    
     df_area = df_filtrado[df_filtrado["AREA"].isin(["Urbano", "Rural"])]
+    if df_area.empty:
+        return go.Figure()
+    
     datos = (df_area.dropna(subset=["INGRESO_USD"])
              .groupby(["AREA", "SEXO"])
              .apply(ingreso_ponderado)
              .reset_index(name="INGRESO_USD"))
+    
+    if datos.empty:
+        return go.Figure()
+    
     fig = px.bar(
         datos, x="AREA", y="INGRESO_USD", color="SEXO",
         barmode="group",
@@ -359,10 +469,14 @@ def grafico_area_urbano_rural(df_filtrado):
 
 
 def grafico_brecha_por_sector(df_filtrado, top_n=12):
+    if "INGRESO_USD" not in df_filtrado.columns:
+        return go.Figure()
+    
     rows = []
     df_ing = df_filtrado.dropna(subset=["INGRESO_USD"])
+    
     for sector, g in df_ing.groupby("ACTIVIDAD_ECONOMICA"):
-        if sector in ("No Especificado", "nan"):
+        if sector in ("No Especificado", "nan", "Nan", "None"):
             continue
         ih = ingreso_ponderado(g[g["SEXO"] == "Hombre"])
         im = ingreso_ponderado(g[g["SEXO"] == "Mujer"])
@@ -370,8 +484,10 @@ def grafico_brecha_por_sector(df_filtrado, top_n=12):
             continue
         n  = g["FACTOR_EXPANSION_ANUAL"].sum()
         rows.append({"Sector": sector, "BRECHA": brecha_salarial(ih, im), "N": n})
+    
     if not rows:
         return go.Figure()
+    
     datos = (pd.DataFrame(rows).nlargest(top_n, "N").sort_values("BRECHA", ascending=True))
     colors = [COLOR_HOMBRE if v > 0 else COLOR_MUJER for v in datos["BRECHA"]]
     fig = go.Figure(go.Bar(
@@ -393,13 +509,24 @@ def grafico_brecha_por_sector(df_filtrado, top_n=12):
 
 
 def grafico_ingreso_sector(df_filtrado, top_n=10):
+    if "INGRESO_USD" not in df_filtrado.columns:
+        return go.Figure()
+    
     df_ing = df_filtrado.dropna(subset=["INGRESO_USD"])
+    if df_ing.empty:
+        return go.Figure()
+    
     top_sectores = (df_ing.groupby("ACTIVIDAD_ECONOMICA")["FACTOR_EXPANSION_ANUAL"]
                     .sum().nlargest(top_n).index.tolist())
+    
     datos = (df_ing[df_ing["ACTIVIDAD_ECONOMICA"].isin(top_sectores)]
              .groupby(["ACTIVIDAD_ECONOMICA", "SEXO"])
              .apply(ingreso_ponderado)
              .reset_index(name="INGRESO_USD"))
+    
+    if datos.empty:
+        return go.Figure()
+    
     fig = px.bar(
         datos, x="ACTIVIDAD_ECONOMICA", y="INGRESO_USD", color="SEXO",
         barmode="group",
@@ -421,22 +548,32 @@ def grafico_radar_paises(df_filtrado):
         eh = estudio_ponderado(g[g["SEXO"] == "Hombre"])
         em = estudio_ponderado(g[g["SEXO"] == "Mujer"])
         part_m = (g[g["SEXO"] == "Mujer"]["FACTOR_EXPANSION_ANUAL"].sum() /
-                  g["FACTOR_EXPANSION_ANUAL"].sum() * 100)
-        brecha = abs(brecha_salarial(ih, im)) if (ih and im) else np.nan
-        indicadores.append({
-            "PAIS": pais, "Ingreso H (norm)": ih, "Ingreso M (norm)": im,
-            "Estudio H": eh, "Estudio M": em,
-            "Part. Mujer (%)": part_m, "Brecha (%)": brecha,
-        })
+                  g["FACTOR_EXPANSION_ANUAL"].sum() * 100) if not g.empty else 0
+        brecha = abs(brecha_salarial(ih, im)) if (ih and im and not np.isnan(ih) and not np.isnan(im)) else np.nan
+        
+        if not np.isnan(ih) and not np.isnan(im):
+            indicadores.append({
+                "PAIS": pais, "Ingreso H (norm)": ih, "Ingreso M (norm)": im,
+                "Estudio H": eh, "Estudio M": em,
+                "Part. Mujer (%)": part_m, "Brecha (%)": brecha,
+            })
+    
     if not indicadores:
         return go.Figure()
+    
     df_r = pd.DataFrame(indicadores).set_index("PAIS")
     df_norm = df_r.copy()
+    
     for col in df_norm.columns:
         mn, mx = df_norm[col].min(), df_norm[col].max()
-        df_norm[col] = (df_norm[col] - mn) / (mx - mn) * 100 if mx > mn else 50
+        if mx > mn:
+            df_norm[col] = (df_norm[col] - mn) / (mx - mn) * 100
+        else:
+            df_norm[col] = 50
+    
     cats = list(df_norm.columns)
     fig = go.Figure()
+    
     for pais in df_norm.index:
         vals = df_norm.loc[pais].tolist()
         fig.add_trace(go.Scatterpolar(
@@ -444,6 +581,7 @@ def grafico_radar_paises(df_filtrado):
             fill="toself", name=pais,
             line_color=COLORES_PAISES.get(pais, "#888"), opacity=0.7,
         ))
+    
     fig.update_layout(
         polar=dict(radialaxis=dict(visible=True, range=[0, 100])),
         title="Comparación Multi-Indicador entre Países (normalizado 0–100)",
@@ -453,10 +591,14 @@ def grafico_radar_paises(df_filtrado):
 
 
 def grafico_burbuja_sectores(df_filtrado, top_n=15):
+    if "INGRESO_USD" not in df_filtrado.columns:
+        return go.Figure()
+    
     rows = []
     df_ing = df_filtrado.dropna(subset=["INGRESO_USD"])
+    
     for sector, g in df_ing.groupby("ACTIVIDAD_ECONOMICA"):
-        if sector in ("No Especificado", "nan", "Nan"):
+        if sector in ("No Especificado", "nan", "Nan", "None"):
             continue
         ih  = ingreso_ponderado(g[g["SEXO"] == "Hombre"])
         im  = ingreso_ponderado(g[g["SEXO"] == "Mujer"])
@@ -465,14 +607,22 @@ def grafico_burbuja_sectores(df_filtrado, top_n=15):
         masa = g["FACTOR_EXPANSION_ANUAL"].sum()
         b    = brecha_salarial(ih, im)
         rows.append({"Sector": sector, "Ingreso H": ih, "Ingreso M": im, "Masa": masa, "Brecha": b})
+    
     if not rows:
         return go.Figure()
+    
     datos = pd.DataFrame(rows).nlargest(top_n, "Masa").reset_index(drop=True)
     masa_min, masa_max = datos["Masa"].min(), datos["Masa"].max()
-    datos["Tamaño"] = 15 + 55 * (datos["Masa"] - masa_min) / (masa_max - masa_min + 1)
+    
+    if masa_max > masa_min:
+        datos["Tamaño"] = 15 + 55 * (datos["Masa"] - masa_min) / (masa_max - masa_min)
+    else:
+        datos["Tamaño"] = 35
+    
     colorscale = [[0.0, "#27AE60"], [0.4, "#F39C12"], [1.0, "#C0392B"]]
     max_val = max(datos["Ingreso H"].max(), datos["Ingreso M"].max()) * 1.1
     min_val = min(datos["Ingreso H"].min(), datos["Ingreso M"].min()) * 0.9
+    
     fig = go.Figure()
     fig.add_trace(go.Scatter(
         x=[min_val, max_val], y=[min_val, max_val],
@@ -509,15 +659,20 @@ def grafico_burbuja_sectores(df_filtrado, top_n=15):
 
 
 def grafico_violin_ingresos(df_filtrado):
+    if "INGRESO_USD" not in df_filtrado.columns:
+        return go.Figure()
+    
     df_vio = df_filtrado.dropna(subset=["INGRESO_USD"])
     if df_vio.empty:
         return go.Figure()
+    
     fig = go.Figure()
     paises = sorted(df_vio["PAIS"].unique())
+    
     for i, pais in enumerate(paises):
         for sexo, color in [("Hombre", COLOR_HOMBRE), ("Mujer", COLOR_MUJER)]:
             datos_sexo = df_vio[(df_vio["PAIS"] == pais) & (df_vio["SEXO"] == sexo)]["INGRESO_USD"]
-            if datos_sexo.empty:
+            if len(datos_sexo) < 10:  # Mínimo de datos para violín
                 continue
             muestra = datos_sexo.sample(min(len(datos_sexo), 2000), random_state=42)
             fig.add_trace(go.Violin(
@@ -528,6 +683,7 @@ def grafico_violin_ingresos(df_filtrado):
                 meanline_visible=True, meanline=dict(color=color, width=2),
                 points=False, bandwidth=30,
             ))
+    
     fig.update_layout(
         title="Distribución Completa del Ingreso Mensual (USD) por País y Sexo",
         yaxis=dict(title="Ingreso mensual (USD)", tickprefix="$", tickformat=",.0f"),
@@ -538,10 +694,14 @@ def grafico_violin_ingresos(df_filtrado):
 
 
 def grafico_heatmap_brecha(df_filtrado, top_n=12):
+    if "INGRESO_USD" not in df_filtrado.columns:
+        return go.Figure()
+    
     df_ing = df_filtrado.dropna(subset=["INGRESO_USD"])
     rows = []
+    
     for (pais, sector), g in df_ing.groupby(["PAIS", "ACTIVIDAD_ECONOMICA"]):
-        if sector in ("No Especificado", "nan", "Nan"):
+        if sector in ("No Especificado", "nan", "Nan", "None"):
             continue
         ih = ingreso_ponderado(g[g["SEXO"] == "Hombre"])
         im = ingreso_ponderado(g[g["SEXO"] == "Mujer"])
@@ -549,18 +709,22 @@ def grafico_heatmap_brecha(df_filtrado, top_n=12):
             continue
         n = g["FACTOR_EXPANSION_ANUAL"].sum()
         rows.append({"PAIS": pais, "Sector": sector, "Brecha": brecha_salarial(ih, im), "N": n})
+    
     if not rows:
         return go.Figure()
+    
     df_heat = pd.DataFrame(rows)
     top_sectores = df_heat.groupby("Sector")["N"].sum().nlargest(top_n).index.tolist()
     df_heat = df_heat[df_heat["Sector"].isin(top_sectores)]
     pivot = df_heat.pivot_table(index="Sector", columns="PAIS", values="Brecha", aggfunc="mean")
     pivot["_media"] = pivot.mean(axis=1)
     pivot = pivot.sort_values("_media", ascending=False).drop(columns="_media")
+    
     z_vals   = pivot.values.tolist()
     y_labels = list(pivot.index)
     x_labels = list(pivot.columns)
     text_vals = [[f"{v:+.1f}%" if not np.isnan(v) else "N/D" for v in fila] for fila in z_vals]
+    
     fig = go.Figure(go.Heatmap(
         z=z_vals, x=x_labels, y=y_labels,
         text=text_vals, texttemplate="%{text}",
@@ -581,27 +745,34 @@ def grafico_waffle_participacion(df_filtrado):
     paises = sorted(df_filtrado["PAIS"].unique())
     if not paises:
         return go.Figure()
+    
     fig = make_subplots(rows=1, cols=len(paises), subplot_titles=paises, horizontal_spacing=0.06)
+    
     for col_idx, pais in enumerate(paises, start=1):
         g = df_filtrado[df_filtrado["PAIS"] == pais]
         total = g["FACTOR_EXPANSION_ANUAL"].sum()
         if total == 0:
             continue
+        
         pct_m = g[g["SEXO"] == "Mujer"]["FACTOR_EXPANSION_ANUAL"].sum() / total
         pct_h = 1 - pct_m
         n_mujer = round(pct_m * 100)
         xs, ys, colores = [], [], []
         count = 0
+        
         for row in range(10):
             for c in range(10):
-                xs.append(c); ys.append(row)
+                xs.append(c)
+                ys.append(row)
                 colores.append(COLOR_MUJER if count < n_mujer else COLOR_HOMBRE)
                 count += 1
+        
         fig.add_trace(go.Scatter(
             x=xs, y=ys, mode="markers",
             marker=dict(symbol="square", size=22, color=colores, line=dict(color="white", width=2)),
             showlegend=(col_idx == 1), legendgroup="waffle", name="",
         ), row=1, col=col_idx)
+        
         fig.add_annotation(
             text=f"<b>♀ {pct_m*100:.1f}%</b>", x=4.5, y=-1.5,
             xref=f"x{col_idx}", yref=f"y{col_idx}", showarrow=False,
@@ -612,6 +783,7 @@ def grafico_waffle_participacion(df_filtrado):
             xref=f"x{col_idx}", yref=f"y{col_idx}", showarrow=False,
             font=dict(size=12, color=COLOR_HOMBRE),
         )
+    
     fig.update_xaxes(visible=False)
     fig.update_yaxes(visible=False, scaleanchor="x")
     fig.update_layout(
@@ -638,17 +810,25 @@ def main():
     with st.sidebar:
         st.markdown("## 🔍 Filtros")
         st.markdown("---")
+        
         paises_disp = sorted(df["PAIS"].unique())
         paises_sel  = st.multiselect("🌎 País", paises_disp, default=paises_disp)
+        
         sexos_disp  = sorted(df["SEXO"].unique())
         sexos_sel   = st.multiselect("👥 Sexo", sexos_disp, default=sexos_disp)
-        areas_disp  = [a for a in ["Urbano", "Rural"] if a in df["AREA"].unique()]
+        
+        areas_disp = []
+        if "AREA" in df.columns:
+            areas_disp = [a for a in ["Urbano", "Rural"] if a in df["AREA"].unique()]
         areas_sel   = st.multiselect("🏙️ Área", areas_disp, default=areas_disp)
-        acts_disp   = sorted([a for a in df["ACTIVIDAD_ECONOMICA"].unique()
-                               if a not in ("No Especificado", "nan", "Nan")])
-        acts_sel    = st.multiselect("🏭 Actividad económica", acts_disp, default=acts_disp)
-        if not acts_sel:
-            acts_sel = list(df["ACTIVIDAD_ECONOMICA"].unique())
+        
+        if "ACTIVIDAD_ECONOMICA" in df.columns:
+            acts_disp = sorted([a for a in df["ACTIVIDAD_ECONOMICA"].unique()
+                               if a not in ("No Especificado", "nan", "Nan", "None")])
+        else:
+            acts_disp = []
+        acts_sel    = st.multiselect("🏭 Actividad económica", acts_disp, default=acts_disp[:5] if acts_disp else [])
+        
         st.markdown("---")
         st.markdown("### 📌 Notas metodológicas")
         st.markdown("""
@@ -659,28 +839,34 @@ def main():
         - Datos cargados desde **Google Drive**
         """)
 
-    df_f = df[
-        df["PAIS"].isin(paises_sel) &
-        df["SEXO"].isin(sexos_sel)  &
-        df["AREA"].isin(areas_sel + [a for a in df["AREA"].unique() if a not in ("Urbano", "Rural")]) &
-        df["ACTIVIDAD_ECONOMICA"].isin(acts_sel)
-    ]
+    # Aplicar filtros
+    df_f = df[df["PAIS"].isin(paises_sel) & df["SEXO"].isin(sexos_sel)]
+    
+    if areas_sel:
+        df_f = df_f[df_f["AREA"].isin(areas_sel)]
+    
+    if acts_sel:
+        df_f = df_f[df_f["ACTIVIDAD_ECONOMICA"].isin(acts_sel)]
 
     if df_f.empty:
         st.warning("⚠️ No hay datos para los filtros seleccionados.")
         st.stop()
 
+    # KPIs
     st.markdown('<div class="section-title">📊 Indicadores Clave (KPIs)</div>', unsafe_allow_html=True)
+    
     ih_global = ingreso_ponderado(df_f[df_f["SEXO"] == "Hombre"])
     im_global = ingreso_ponderado(df_f[df_f["SEXO"] == "Mujer"])
     eh_global = estudio_ponderado(df_f[df_f["SEXO"] == "Hombre"])
     em_global = estudio_ponderado(df_f[df_f["SEXO"] == "Mujer"])
     brecha_g  = brecha_salarial(ih_global, im_global)
+    
     part_m = (df_f[df_f["SEXO"] == "Mujer"]["FACTOR_EXPANSION_ANUAL"].sum() /
               df_f["FACTOR_EXPANSION_ANUAL"].sum() * 100) if not df_f.empty else 0
     part_h = 100 - part_m
 
     c1, c2, c3, c4, c5, c6 = st.columns(6)
+    
     with c1:
         st.markdown(tarjeta_kpi("Ingreso Promedio — Hombres",
             f"${ih_global:,.0f}" if not np.isnan(ih_global) else "N/D", "USD / mes", "blue"), unsafe_allow_html=True)
@@ -717,61 +903,85 @@ def main():
 
     st.markdown("---")
 
+    # Gráficos principales
     st.markdown('<div class="section-title">💰 Ingresos por País y Sexo</div>', unsafe_allow_html=True)
     col1, col2 = st.columns(2)
-    with col1: st.plotly_chart(grafico_barras_ingresos(df_f), use_container_width=True)
-    with col2: st.plotly_chart(grafico_brecha_paises(df_f), use_container_width=True)
+    with col1: 
+        fig1 = grafico_barras_ingresos(df_f)
+        if fig1.data: st.plotly_chart(fig1, use_container_width=True)
+    with col2: 
+        fig2 = grafico_brecha_paises(df_f)
+        if fig2.data: st.plotly_chart(fig2, use_container_width=True)
 
     st.markdown('<div class="section-title">📈 Distribución del Ingreso y Educación</div>', unsafe_allow_html=True)
     col3, col4 = st.columns(2)
-    with col3: st.plotly_chart(boxplot_ingresos(df_f), use_container_width=True)
-    with col4: st.plotly_chart(grafico_educacion(df_f), use_container_width=True)
+    with col3: 
+        fig3 = boxplot_ingresos(df_f)
+        if fig3.data: st.plotly_chart(fig3, use_container_width=True)
+    with col4: 
+        fig4 = grafico_educacion(df_f)
+        if fig4.data: st.plotly_chart(fig4, use_container_width=True)
 
     st.markdown('<div class="section-title">🏙️ Área Geográfica y Participación Laboral</div>', unsafe_allow_html=True)
     col5, col6 = st.columns(2)
-    with col5: st.plotly_chart(grafico_area_urbano_rural(df_f), use_container_width=True)
-    with col6: st.plotly_chart(grafico_participacion(df_f), use_container_width=True)
+    with col5: 
+        fig5 = grafico_area_urbano_rural(df_f)
+        if fig5.data: st.plotly_chart(fig5, use_container_width=True)
+    with col6: 
+        fig6 = grafico_participacion(df_f)
+        if fig6.data: st.plotly_chart(fig6, use_container_width=True)
 
     st.markdown('<div class="section-title">🏭 Análisis por Actividad Económica</div>', unsafe_allow_html=True)
-    st.plotly_chart(grafico_ingreso_sector(df_f), use_container_width=True)
-    st.plotly_chart(grafico_brecha_por_sector(df_f), use_container_width=True)
+    fig7 = grafico_ingreso_sector(df_f)
+    if fig7.data: st.plotly_chart(fig7, use_container_width=True)
+    
+    fig8 = grafico_brecha_por_sector(df_f)
+    if fig8.data: st.plotly_chart(fig8, use_container_width=True)
 
     st.markdown('<div class="section-title">🫧 Mapa de Brechas por Sector Económico</div>', unsafe_allow_html=True)
-    st.plotly_chart(grafico_burbuja_sectores(df_f), use_container_width=True)
+    fig9 = grafico_burbuja_sectores(df_f)
+    if fig9.data: st.plotly_chart(fig9, use_container_width=True)
 
     st.markdown('<div class="section-title">🎻 Distribución Real del Ingreso — Gráfico de Violín</div>', unsafe_allow_html=True)
-    st.plotly_chart(grafico_violin_ingresos(df_f), use_container_width=True)
+    fig10 = grafico_violin_ingresos(df_f)
+    if fig10.data: st.plotly_chart(fig10, use_container_width=True)
 
     st.markdown('<div class="section-title">🌡️ Mapa de Calor — Brecha Salarial por País y Sector</div>', unsafe_allow_html=True)
-    st.plotly_chart(grafico_heatmap_brecha(df_f), use_container_width=True)
+    fig11 = grafico_heatmap_brecha(df_f)
+    if fig11.data: st.plotly_chart(fig11, use_container_width=True)
 
     st.markdown('<div class="section-title">🧇 Waffle Chart — Composición de la Fuerza Laboral</div>', unsafe_allow_html=True)
-    st.plotly_chart(grafico_waffle_participacion(df_f), use_container_width=True)
+    fig12 = grafico_waffle_participacion(df_f)
+    if fig12.data: st.plotly_chart(fig12, use_container_width=True)
 
     st.markdown('<div class="section-title">🕸️ Comparación Multi-Indicador entre Países</div>', unsafe_allow_html=True)
-    st.plotly_chart(grafico_radar_paises(df_f), use_container_width=True)
+    fig13 = grafico_radar_paises(df_f)
+    if fig13.data: st.plotly_chart(fig13, use_container_width=True)
 
     st.markdown('<div class="section-title">📋 Tabla Resumen por País y Sexo</div>', unsafe_allow_html=True)
     resumen_rows = []
     for pais in sorted(df_f["PAIS"].unique()):
         for sexo in ["Hombre", "Mujer"]:
             g = df_f[(df_f["PAIS"] == pais) & (df_f["SEXO"] == sexo)]
-            if g.empty: continue
+            if g.empty: 
+                continue
             resumen_rows.append({
                 "País": pais, "Sexo": sexo,
-                "Ingreso promedio (USD)": f"${ingreso_ponderado(g):,.2f}",
-                "Años de estudio": f"{estudio_ponderado(g):.2f}",
+                "Ingreso promedio (USD)": f"${ingreso_ponderado(g):,.2f}" if not np.isnan(ingreso_ponderado(g)) else "N/D",
+                "Años de estudio": f"{estudio_ponderado(g):.2f}" if not np.isnan(estudio_ponderado(g)) else "N/D",
                 "Participación (%)": f"{g['FACTOR_EXPANSION_ANUAL'].sum() / df_f['FACTOR_EXPANSION_ANUAL'].sum() * 100:.1f}%",
                 "N observaciones": f"{len(g):,}",
             })
-    st.dataframe(pd.DataFrame(resumen_rows), use_container_width=True, hide_index=True)
+    
+    if resumen_rows:
+        st.dataframe(pd.DataFrame(resumen_rows), use_container_width=True, hide_index=True)
 
     st.markdown("---")
     st.markdown(
         "<center style='color:#95A5A6; font-size:0.82rem;'>"
         "Dashboard de Análisis de Brecha de Género · Bolivia, Ecuador y Perú · "
         "Datos cargados desde Google Drive · Ingresos en USD"
-        "</center>", unsafe_allow_html=True,
+        "</center>", unsafe_html=True,
     )
 
 

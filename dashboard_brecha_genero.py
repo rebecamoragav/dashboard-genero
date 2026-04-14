@@ -145,7 +145,7 @@ def cargar_datos() -> pd.DataFrame:
         st.error(f"⚠️ Columnas no encontradas: {missing}\nColumnas disponibles: {list(df.columns)}")
         st.stop()
 
-def safe_map(x, mapping):
+    def safe_map(x, mapping):
     try:
         s = str(x).strip().upper()
         if s in ("NAN", "NONE", "NAT", "", " "):
@@ -153,9 +153,6 @@ def safe_map(x, mapping):
         return mapping.get(s, mapping.get(s[:1], x))
     except Exception:
         return x
-
-df["SEXO"] = df["SEXO"].apply(lambda x: safe_map(x, GENDER_MAP))
-df["AREA"] = df["AREA"].apply(lambda x: safe_map(x, AREA_MAP))
 
     df["SEXO"] = df["SEXO"].apply(lambda x: safe_map(x, GENDER_MAP))
     df["AREA"] = df["AREA"].apply(lambda x: safe_map(x, AREA_MAP))

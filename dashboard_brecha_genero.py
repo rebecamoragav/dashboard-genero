@@ -212,8 +212,8 @@ def cargar_datos() -> pd.DataFrame:
     if x_str in GENDER_MAP:
         return GENDER_MAP[x_str]
     
-    # Mapeo por primera letra (solo si es string válido)
-    if isinstance(x_str, str) and len(x_str) > 0:
+    # Mapeo por primera letra
+    if len(x_str) > 0:
         first_char = x_str[0]
         if first_char in GENDER_MAP:
             return GENDER_MAP[first_char]

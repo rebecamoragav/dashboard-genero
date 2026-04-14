@@ -16,6 +16,7 @@ from plotly.subplots import make_subplots
 import warnings
 import requests
 import io
+import sys
 
 warnings.filterwarnings("ignore")
 
@@ -111,13 +112,11 @@ def cargar_datos() -> pd.DataFrame:
     """
     Descarga el CSV desde Google Drive y lo procesa.
     """
-    # Método mejorado para Google Drive
     def download_file_from_google_drive(id):
         URL = "https://docs.google.com/uc?export=download"
         session = requests.Session()
         response = session.get(URL, params={'id': id}, stream=True)
         
-        # Verificar si hay advertencia de virus
         for key, value in response.cookies.items():
             if key.startswith('download_warning'):
                 params = {'id': id, 'confirm': value}
@@ -127,7 +126,6 @@ def cargar_datos() -> pd.DataFrame:
         return response.content
     
     try:
-        # Descargar el archivo
         file_content = download_file_from_google_drive(GDRIVE_FILE_ID)
         
         # Intentar diferentes codificaciones
@@ -189,13 +187,15 @@ def cargar_datos() -> pd.DataFrame:
     
     missing = [c for c in required if c not in df.columns]
     if missing:
-        st.error(f"⚠️ Columnas no encontradas: {missing}\n"
-                 f"Columnas disponibles: {list(df.columns)[:10]}...")
+        st.warning(f"⚠️ Columnas no encontradas: {missing}")
+        st.info(f"Columnas disponibles: {list(df.columns)[:15]}")
         
-        # Intentar crear columnas dummy si es necesario
+        # Crear columnas dummy si es necesario
         for col in missing:
             if col == "FACTOR_EXPANSION_ANUAL":
                 df[col] = 1.0
+            elif col in ["ANIOS_ESTUDIO", "INGRESO_LABORAL_OCP_PPAL_MES"]:
+                df[col] = np.nan
             else:
                 df[col] = "No Especificado"
     
@@ -439,7 +439,7 @@ def grafico_participacion(df_filtrado):
 
 
 def grafico_area_urbano_rural(df_filtrado):
-    if "INGRESO_USD" not in df_filtrado.columns:
+    if "INGRESO_USD" not in df_filtrado.columns or "AREA" not in df_filtrado.columns:
         return go.Figure()
     
     df_area = df_filtrado[df_filtrado["AREA"].isin(["Urbano", "Rural"])]
@@ -672,7 +672,7 @@ def grafico_violin_ingresos(df_filtrado):
     for i, pais in enumerate(paises):
         for sexo, color in [("Hombre", COLOR_HOMBRE), ("Mujer", COLOR_MUJER)]:
             datos_sexo = df_vio[(df_vio["PAIS"] == pais) & (df_vio["SEXO"] == sexo)]["INGRESO_USD"]
-            if len(datos_sexo) < 10:  # Mínimo de datos para violín
+            if len(datos_sexo) < 10:
                 continue
             muestra = datos_sexo.sample(min(len(datos_sexo), 2000), random_state=42)
             fig.add_trace(go.Violin(
@@ -981,7 +981,7 @@ def main():
         "<center style='color:#95A5A6; font-size:0.82rem;'>"
         "Dashboard de Análisis de Brecha de Género · Bolivia, Ecuador y Perú · "
         "Datos cargados desde Google Drive · Ingresos en USD"
-        "</center>", unsafe_html=True,
+        "</center>", unsafe_allow_html=True,
     )
 
 
